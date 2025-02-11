@@ -34,7 +34,7 @@ logger = logging.getLogger(__name__)
 # ---------------------
 load_dotenv()
 # For local development you can hard-code (or use .env) your API key:
-os.environ["OPENAI_API_KEY"] = "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"
+os.environ["OPENAI_API_KEY"] = os.getenv("OPENAI_API_KEY", "your_default_openai_key_if_needed")
 
 class Config:
     OPENAI_API_KEY = os.environ["OPENAI_API_KEY"]
