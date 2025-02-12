@@ -100,11 +100,67 @@ async def verify_api_key(api_key: str = Depends(api_key_header)):
 limiter = Limiter(key_func=get_remote_address)
 
 
-try:
-    from config.knowledge_base import KNOWLEDGE_BASE, BACKUP_CONTENT
-except ImportError:
-    logger.warning("Using default knowledge base configuration")
-    from config.default_knowledge_base import KNOWLEDGE_BASE, BACKUP_CONTENT
+KNOWLEDGE_BASE = {
+    "sales_ai": {
+        "url": "https://www.artisan.co/sales-ai",
+        "patterns": {
+            "features": "div.features",
+            "benefits": "div.benefits",
+            "use_cases": "div.use-cases"
+        }
+    },
+    "ai_agent": {
+        "url": "https://www.artisan.co/ai-sales-agent",
+        "patterns": {
+            "capabilities": "div.capabilities",
+            "integrations": "div.integrations",
+            "workflow": "div.workflow"
+        }
+    }
+}
+
+BACKUP_CONTENT = {
+    "sales_ai": {
+        "features": """
+        - AI-powered sales automation
+        - Intelligent lead scoring
+        - Automated follow-ups
+        - Performance analytics
+        """,
+        "benefits": """
+        - Increased sales efficiency
+        - Higher conversion rates
+        - Reduced manual work
+        - Better lead quality
+        """,
+        "use_cases": """
+        - B2B lead generation
+        - Sales pipeline automation
+        - Customer engagement
+        - Sales team productivity
+        """
+    },
+    "ai_agent": {
+        "capabilities": """
+        - Natural language processing
+        - Smart response generation
+        - Context awareness
+        - Multi-channel support
+        """,
+        "integrations": """
+        - CRM systems
+        - Email platforms
+        - Communication tools
+        - Analytics platforms
+        """,
+        "workflow": """
+        - Lead qualification
+        - Automated outreach
+        - Follow-up scheduling
+        - Performance tracking
+        """
+    }
+}
 
 
 
