@@ -7,7 +7,8 @@ import logging
 import asyncio
 from typing import Dict, List, Optional, Any
 from datetime import datetime, timedelta
-
+from starlette.requests import Request
+from fastapi.responses import Response
 import aiohttp
 import psutil
 from fastapi import FastAPI, HTTPException, BackgroundTasks, Depends, Request
@@ -530,13 +531,20 @@ startup_time = datetime.now()
 @app.middleware("http")
 async def add_process_time_header(request: Request, call_next):
     start_time = datetime.now()
-    response = await call_next(request)
-    process_time = (datetime.now() - start_time).total_seconds()
+    request.state.conversation_id = "unknown"
+   
+    if request.url.path == "/chat" and request.method == "POST":
+        try:
+            body = await request.json()
+            request.state.conversation_id = body.get('conversation_id', 'unknown')
+        except Exception:
+            pass  # If parsing fails, keep it as 'unknown'
 
-    # Record metrics if it's a chat request
-    if request.url.path == "/chat":
-        conversation_id = request.path_params.get("conversation_id", "unknown")
-        await metrics_collector.record_request(conversation_id, process_time)
+    response = await call_next(request)
+    
+    process_time = (datetime.now() - start_time).total_seconds()
+    
+    await metrics_collector.record_request(request.state.conversation_id, process_time)
 
     response.headers["X-Process-Time"] = str(process_time)
     return response
