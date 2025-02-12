@@ -1,4 +1,10 @@
-.env
 __pycache__/
-*.pyc
+*.py[cod]
+*$py.class
+.env
+.venv
+venv/
+.idea/
+.vscode/
+*.log
 chroma_db/
