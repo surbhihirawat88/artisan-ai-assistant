@@ -554,26 +554,26 @@ async def add_process_time_header(request: Request, call_next):
 @app.post("/chat", response_model=ChatResponse)
 @limiter.limit(Config.RATE_LIMIT)
 async def chat(
-        request: ChatRequest,
-        background_tasks: BackgroundTasks,
-        api_key: str = Depends(verify_api_key),
-        request_id: Request = None
+    chat_request: ChatRequest,            # Renamed parameter for request body
+    background_tasks: BackgroundTasks,
+    api_key: str = Depends(verify_api_key),
+    request: Request                      # Correctly typed Request object for middlewares
 ):
     try:
-        # Save the user's message
+        # Save the user's message using the body parameter 'chat_request'
         await conversation_manager.memory.save_message(
-            request.conversation_id,
+            chat_request.conversation_id,
             "user",
-            request.message
+            chat_request.message
         )
 
         # Get response using the conversation chain
-        chain = conversation_manager.get_conversation_chain(request.conversation_id)
-        result = chain({"question": request.message})
+        chain = conversation_manager.get_conversation_chain(chat_request.conversation_id)
+        result = chain({"question": chat_request.message})
 
         # Save the assistant's response
         await conversation_manager.memory.save_message(
-            request.conversation_id,
+            chat_request.conversation_id,
             "assistant",
             result["answer"]
         )
@@ -586,7 +586,7 @@ async def chat(
             sources=[doc.page_content[:200] for doc in result.get("source_documents", [])],
             confidence=min(len(result.get("source_documents", [])) / 3.0, 1.0),
             suggested_actions=_generate_suggested_actions(result["answer"]),
-            related_topics=_extract_related_topics(request.message, result["answer"])
+            related_topics=_extract_related_topics(chat_request.message, result["answer"])
         )
     except Exception as e:
         logger.error(f"Chat error: {str(e)}")
