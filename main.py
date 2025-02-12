@@ -24,7 +24,7 @@ from slowapi.errors import RateLimitExceeded
 # Langchain imports
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain_community.vectorstores import Chroma
+from langchain_chroma import Chroma
 from langchain.memory import ConversationBufferWindowMemory
 from langchain.chains import ConversationalRetrievalChain
 from langchain.prompts import PromptTemplate
@@ -348,11 +348,8 @@ class KnowledgeManager:
                     if not content and section in self.backup_content:
                         content = self.backup_content[section]
                     if content:
-                        self.redis.hset(
-                            f"knowledge:{section}",
-                            mapping=content,
-                            ex=Config.REDIS_KEY_TTL
-                        )
+                        self.redis.hset(f"knowledge:{section}", mapping=content)
+                        self.redis.expire(f"knowledge:{section}", Config.REDIS_KEY_TTL)
                         all_content.extend(content.values())
                         break
                 except Exception as e:
@@ -385,7 +382,7 @@ class KnowledgeManager:
                     self.embeddings,
                     persist_directory=Config.CHROMA_PERSIST_DIR
                 )
-                vectorstore.persist()
+                
                 self.vectorstore = vectorstore
 
                 # Remove backup after successful update
@@ -650,11 +647,11 @@ async def shutdown_event():
 
 if __name__ == "__main__":
     import uvicorn
-
+    port = int(os.getenv("PORT", "10000"))  # Add this line
     uvicorn.run(
         app,
         host="0.0.0.0",
-        port=8000,
+        port=port,  # Use port variable
         log_level="info",
         reload=True if os.getenv("ENVIRONMENT") == "development" else False
     )
