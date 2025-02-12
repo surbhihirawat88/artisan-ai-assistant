@@ -29,9 +29,7 @@ from langchain.memory import ConversationBufferWindowMemory
 from langchain.chains import ConversationalRetrievalChain
 from langchain.prompts import PromptTemplate
 
-# ---------------------
-# Setup Logging
-# ---------------------
+
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
@@ -42,9 +40,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# ---------------------
-# Load Environment Variables
-# ---------------------
+
 load_dotenv()
 
 
@@ -89,9 +85,6 @@ class Config:
         return cls.ALLOWED_ORIGINS
 
 
-# ---------------------
-# Security Setup
-# ---------------------
 api_key_header = APIKeyHeader(name="X-API-Key")
 
 
@@ -104,14 +97,9 @@ async def verify_api_key(api_key: str = Depends(api_key_header)):
     return api_key
 
 
-# ---------------------
-# Rate Limiting Setup
-# ---------------------
 limiter = Limiter(key_func=get_remote_address)
 
-# ---------------------
-# Load Knowledge Base Config
-# ---------------------
+
 try:
     from config.knowledge_base import KNOWLEDGE_BASE, BACKUP_CONTENT
 except ImportError:
@@ -119,9 +107,7 @@ except ImportError:
     from config.default_knowledge_base import KNOWLEDGE_BASE, BACKUP_CONTENT
 
 
-# ---------------------
-# Pydantic Models
-# ---------------------
+
 class ChatRequest(BaseModel):
     message: constr(min_length=1, max_length=2000)
     conversation_id: constr(min_length=1, max_length=50, regex="^[a-zA-Z0-9_-]+$")
@@ -159,9 +145,6 @@ class HealthCheckResponse(BaseModel):
     uptime: float
 
 
-# ---------------------
-# Metrics Collection
-# ---------------------
 class MetricsCollector:
     def __init__(self, redis_client: Redis):
         self.redis = redis_client
@@ -185,9 +168,6 @@ class MetricsCollector:
         }
 
 
-# ---------------------
-# Redis Memory Manager
-# ---------------------
 class RedisConversationMemory:
     def __init__(self, redis_client: Redis):
         self.redis = redis_client
@@ -225,9 +205,6 @@ class RedisConversationMemory:
                 self.redis.delete(key)
 
 
-# ---------------------
-# Knowledge Manager with Scraping
-# ---------------------
 class KnowledgeManager:
     def __init__(self, redis_client: Redis):
         self.redis = redis_client
@@ -379,9 +356,7 @@ class KnowledgeManager:
             logger.error(f"Error getting vector store size: {str(e)}")
             return 0
 
-# ---------------------
-# Conversation Manager
-# ---------------------
+
 class ConversationManager:
     def __init__(self, knowledge_manager: KnowledgeManager, redis_client: Redis):
         self.knowledge_manager = knowledge_manager
@@ -464,10 +439,6 @@ def _generate_suggested_actions(response: str) -> List[str]:
         actions.append("Visit integration documentation")
     return actions[:3]
 
-
-# ---------------------
-# FastAPI App Setup
-# ---------------------
 app = FastAPI(
     title="Artisan AI Assistant",
     description="AI-powered assistant for Artisan platform",
@@ -498,10 +469,6 @@ metrics_collector = MetricsCollector(redis_client)
 # Startup timestamp for uptime calculation
 startup_time = datetime.now()
 
-
-# ---------------------
-# Middleware
-# ---------------------
 @app.middleware("http")
 async def add_process_time_header(request: Request, call_next):
     start_time = datetime.now()
@@ -517,9 +484,7 @@ async def add_process_time_header(request: Request, call_next):
     return response
 
 
-# ---------------------
-# API Endpoints
-# ---------------------
+
 @app.post("/chat", response_model=ChatResponse)
 @limiter.limit(Config.RATE_LIMIT)
 async def chat(
@@ -607,9 +572,6 @@ async def get_history_count(
     return {"message_count": len(history)}
 
 
-# ---------------------
-# Startup Event
-# ---------------------
 @app.on_event("startup")
 async def startup_event():
     # Initialize knowledge base
@@ -617,9 +579,7 @@ async def startup_event():
     logger.info("Application started, knowledge base initialized")
 
 
-# ---------------------
-# Shutdown Event
-# ---------------------
+
 @app.on_event("shutdown")
 async def shutdown_event():
     # Clean up resources
