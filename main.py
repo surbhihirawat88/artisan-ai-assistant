@@ -11,7 +11,7 @@ from starlette.requests import Request
 from fastapi.responses import Response
 import aiohttp
 import psutil
-from fastapi import FastAPI, HTTPException, BackgroundTasks, Depends, Request
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import APIKeyHeader
 from pydantic import BaseModel, Field, validator, constr
