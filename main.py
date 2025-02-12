@@ -554,10 +554,10 @@ async def add_process_time_header(request: Request, call_next):
 @app.post("/chat", response_model=ChatResponse)
 @limiter.limit(Config.RATE_LIMIT)
 async def chat(
-    chat_request: ChatRequest,            # Renamed parameter for request body
+    request: Request,                      # Request object for middlewares
+    chat_request: ChatRequest,             # Request body data
     background_tasks: BackgroundTasks,
-    api_key: str = Depends(verify_api_key),
-    request: Request                      # Correctly typed Request object for middlewares
+    api_key: str = Depends(verify_api_key) # Default parameter
 ):
     try:
         # Save the user's message using the body parameter 'chat_request'
@@ -591,6 +591,7 @@ async def chat(
     except Exception as e:
         logger.error(f"Chat error: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
+
 
 
 @app.get("/health", response_model=HealthCheckResponse)
