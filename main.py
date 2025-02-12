@@ -165,8 +165,13 @@ BACKUP_CONTENT = {
 
 
 class ChatRequest(BaseModel):
-    message: constr(min_length=1, max_length=2000)
-    conversation_id: constr(min_length=1, max_length=50, regex="^[a-zA-Z0-9_-]+$")
+    message: str = Field(..., min_length=1, max_length=2000)
+    conversation_id: str = Field(
+        ..., 
+        min_length=1, 
+        max_length=50, 
+        pattern="^[a-zA-Z0-9_-]+$"  # Using pattern instead of regex
+    )
     context: Optional[Dict[str, Any]] = None
 
     @validator('message')
