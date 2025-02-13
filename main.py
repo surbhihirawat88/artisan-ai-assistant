@@ -29,6 +29,10 @@ from langchain_chroma import Chroma
 from langchain.memory import ConversationBufferWindowMemory
 from langchain.chains import ConversationalRetrievalChain
 from langchain.prompts import PromptTemplate
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .knowledge_manager import KnowledgeManager
 
 
 logging.basicConfig(
@@ -44,47 +48,7 @@ logger = logging.getLogger(__name__)
 
 load_dotenv()
 
-class BackgroundTaskManager:
-    def __init__(self, knowledge_manager: KnowledgeManager):
-        self.knowledge_manager = knowledge_manager
-        self.is_running = False
-        self.tasks = []
 
-    async def start_tasks(self):
-        # Starts all background tasks if not already running
-        if not self.is_running:
-            self.is_running = True
-            self.tasks = [
-                asyncio.create_task(self._periodic_knowledge_update()),
-                asyncio.create_task(self._periodic_cleanup())
-            ]
-
-    async def stop_tasks(self):
-        # Properly shuts down all background tasks
-        self.is_running = False
-        for task in self.tasks:
-            task.cancel()
-        await asyncio.gather(*self.tasks, return_exceptions=True)
-
-    async def _periodic_knowledge_update(self):
-        # Periodically updates the knowledge base
-        while self.is_running:
-            try:
-                await self.knowledge_manager.update_knowledge_base()
-                await asyncio.sleep(Config.KNOWLEDGE_UPDATE_INTERVAL)
-            except Exception as e:
-                logger.error(f"Knowledge update failed: {str(e)}", exc_info=True)
-                await asyncio.sleep(300)  # Wait 5 minutes before retry
-
-    async def _periodic_cleanup(self):
-        # Periodically cleans up old data
-        while self.is_running:
-            try:
-                await self.knowledge_manager._cleanup_vector_store()
-                await asyncio.sleep(Config.CLEANUP_INTERVAL)
-            except Exception as e:
-                logger.error(f"Cleanup failed: {str(e)}", exc_info=True)
-                await asyncio.sleep(300)
 class Config:
     """Application configuration"""
     OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
@@ -462,7 +426,47 @@ class KnowledgeManager:
         except Exception as e:
             logger.error(f"Error getting vector store size: {str(e)}")
             return 0
+class BackgroundTaskManager:
+    def __init__(self, knowledge_manager: KnowledgeManager):
+        self.knowledge_manager = knowledge_manager
+        self.is_running = False
+        self.tasks = []
 
+    async def start_tasks(self):
+        # Starts all background tasks if not already running
+        if not self.is_running:
+            self.is_running = True
+            self.tasks = [
+                asyncio.create_task(self._periodic_knowledge_update()),
+                asyncio.create_task(self._periodic_cleanup())
+            ]
+
+    async def stop_tasks(self):
+        # Properly shuts down all background tasks
+        self.is_running = False
+        for task in self.tasks:
+            task.cancel()
+        await asyncio.gather(*self.tasks, return_exceptions=True)
+
+    async def _periodic_knowledge_update(self):
+        # Periodically updates the knowledge base
+        while self.is_running:
+            try:
+                await self.knowledge_manager.update_knowledge_base()
+                await asyncio.sleep(Config.KNOWLEDGE_UPDATE_INTERVAL)
+            except Exception as e:
+                logger.error(f"Knowledge update failed: {str(e)}", exc_info=True)
+                await asyncio.sleep(300)  # Wait 5 minutes before retry
+
+    async def _periodic_cleanup(self):
+        # Periodically cleans up old data
+        while self.is_running:
+            try:
+                await self.knowledge_manager._cleanup_vector_store()
+                await asyncio.sleep(Config.CLEANUP_INTERVAL)
+            except Exception as e:
+                logger.error(f"Cleanup failed: {str(e)}", exc_info=True)
+                await asyncio.sleep(300)
 
 class ConversationManager:
     def __init__(self, knowledge_manager: KnowledgeManager, redis_client: Redis):
