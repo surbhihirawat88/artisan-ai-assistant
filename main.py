@@ -482,27 +482,75 @@ class ConversationManager:
     def _setup_prompt_template(self):
         self.prompt = PromptTemplate(
             template="""
-    You are an AI assistant for Artisan, specializing in:
-    1. Sales Platform and AI Agent (Ava)
-    2. Email Warmup and Deliverability
-    3. LinkedIn Outreach and Sales Automation
-    4. Data Services (B2B, E-commerce, Local)
-    
-    Current context: {context}
-    Previous conversation:
-    {chat_history}
-    
-    Input: {input}
-    
-    Provide a response that:
-    1. Directly addresses the question
-    2. References specific Artisan features
-    3. Includes relevant examples
-    4. Suggests next steps when appropriate
-    
-    Response:""",
-            input_variables=["context", "chat_history", "input"]  # Changed from "question" to "input"
+You are an AI assistant for Artisan, specializing in:
+1. Sales Platform and AI Agent (Ava)
+2. Email Warmup and Deliverability
+3. LinkedIn Outreach and Sales Automation
+4. Data Services (B2B, E-commerce, Local)
+
+Current context: {context}
+Previous conversation:
+{chat_history}
+
+Question: {question}
+
+Provide a response that:
+1. Directly addresses the question
+2. References specific Artisan features
+3. Includes relevant examples
+4. Suggests next steps when appropriate
+
+Response:""",
+            input_variables=["context", "chat_history", "question"]
         )
+
+    def get_conversation_chain(self, conversation_id: str) -> ConversationalRetrievalChain:
+        try:
+            # Initialize memory with proper configuration
+            memory = ConversationBufferWindowMemory(
+                memory_key="chat_history",
+                input_key="question",
+                output_key="answer",
+                return_messages=True,
+                k=Config.MEMORY_WINDOW_SIZE
+            )
+
+            # Load history into memory
+            history = self.memory.get_history(conversation_id)
+            for msg in history:
+                if msg["role"] == "user":
+                    memory.save_context(
+                        {"question": msg["content"]},
+                        {"answer": ""}
+                    )
+                else:
+                    prev_msg = next(
+                        (h["content"] for h in history 
+                         if h["role"] == "user" and 
+                         datetime.fromisoformat(h["timestamp"]) < datetime.fromisoformat(msg["timestamp"])),
+                        ""
+                    )
+                    memory.save_context(
+                        {"question": prev_msg},
+                        {"answer": msg["content"]}
+                    )
+
+            return ConversationalRetrievalChain.from_llm(
+                llm=self.llm,
+                retriever=self.knowledge_manager.vectorstore.as_retriever(
+                    search_kwargs={"k": 5}
+                ),
+                memory=memory,
+                chain_type="stuff",
+                combine_docs_chain_kwargs={
+                    "prompt": self.prompt
+                },
+                return_source_documents=True,
+                verbose=True
+            )
+        except Exception as e:
+            logger.error(f"Error creating conversation chain: {str(e)}", exc_info=True)
+            raise
 
     def _validate_history(self, history: List[Dict]) -> bool:
         """Validate that history contains required fields and proper formatting."""
@@ -520,62 +568,7 @@ class ConversationManager:
         except Exception as e:
             logger.error(f"History validation failed: {str(e)}")
             return False
-
-    def get_conversation_chain(self, conversation_id: str) -> ConversationalRetrievalChain:
-        try:
-            # Get and format history
-            history = self.memory.get_history(conversation_id)
-            formatted_history = "\n".join([
-                f"{'User' if msg['role'] == 'user' else 'Assistant'}: {msg['content']}"
-                for msg in history
-            ])
-    
-            # Initialize memory with proper configuration
-            memory = ConversationBufferWindowMemory(
-                memory_key="chat_history",
-                return_messages=True,
-                k=Config.MEMORY_WINDOW_SIZE
-            )
-    
-            # Convert history to message format and inject into memory
-            for msg in history:
-                if msg["role"] == "user":
-                    memory.save_context(
-                        {"question": msg["content"]},  # Changed back to "question"
-                        {"answer": ""}  # Changed back to "answer"
-                    )
-                else:
-                    prev_msg = next(
-                        (h["content"] for h in history 
-                         if h["role"] == "user" and 
-                         datetime.fromisoformat(h["timestamp"]) < datetime.fromisoformat(msg["timestamp"])),
-                        ""
-                    )
-                    memory.save_context(
-                        {"question": prev_msg},  # Changed back to "question"
-                        {"answer": msg["content"]}  # Changed back to "answer"
-                    )
-    
-            # Create the chain with default configuration
-            return ConversationalRetrievalChain.from_llm(
-                llm=self.llm,
-                retriever=self.knowledge_manager.vectorstore.as_retriever(
-                    search_kwargs={"k": 5}
-                ),
-                memory=memory,
-                combine_docs_chain_kwargs={
-                    "prompt": self.prompt,
-                    "document_separator": "\n\n"
-                },
-                return_source_documents=True,
-                verbose=True
-            )
-        except Exception as e:
-            logger.error(f"Error creating conversation chain: {str(e)}", exc_info=True)
-            raise
-
-
-
+            
 def _generate_suggested_actions(response: str) -> List[str]:
     actions = []
     if "setup" in response.lower():
@@ -674,7 +667,7 @@ async def chat(
         
         # Call chain with default keys
         result = chain({
-            "question": chat_request.message,  # Changed back to "question"
+            "question": chat_request.message,
             "context": json.dumps(context, default=str)
         })
 
