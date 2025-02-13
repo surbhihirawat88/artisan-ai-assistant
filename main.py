@@ -693,10 +693,7 @@ async def chat(
 ):
     try:
         # Get relevant content
-        history = conversation_manager.memory.get_history(chat_request.conversation_id)
         relevant_content = knowledge_manager.get_relevant_content(chat_request.message)
-        logger.info(f"Processing message for conversation {chat_request.conversation_id}")
-        logger.info(f"Current history length: {len(history)}")
         
         # Format context
         context = {
@@ -731,7 +728,6 @@ async def chat(
         # Schedule background task
         background_tasks.add_task(knowledge_manager.update_knowledge_base)
 
-        # Return response after scheduling background task
         return ChatResponse(
             response=result["answer"],
             sources=[doc.page_content[:200] for doc in result.get("source_documents", [])],
@@ -743,6 +739,30 @@ async def chat(
     except Exception as e:
         logger.error(f"Chat error: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+def extract_related_topics(query: str, response: str) -> List[str]:
+    """Extract related topics from query and response."""
+    topics = []
+    topic_mapping = {
+        "sales_ai": ["sales", "automation", "pipeline", "leads", "crm"],
+        "ai_agent": ["agent", "ava", "assistant", "bot", "ai"],
+        "email_warmup": ["email", "warmup", "deliverability", "inbox", "spam"],
+        "linkedin": ["linkedin", "social", "network", "outreach", "profile"],
+        "data_services": ["data", "b2b", "ecommerce", "local", "database"]
+    }
+
+    combined_text = f"{query.lower()} {response.lower()}"
+    
+    for topic, keywords in topic_mapping.items():
+        if any(keyword in combined_text for keyword in keywords):
+            topics.append(topic)
+    
+    # If no topics found, include default topics
+    if not topics:
+        topics = ["sales_ai", "ai_agent"]
+    
+    return topics[:3]  # Return top 3 related topics
 
 
 @app.get("/health", response_model=HealthCheckResponse)
