@@ -282,19 +282,37 @@ class MetricsCollector:
             "total_conversations": len(self.redis.keys("chat:*"))
         }
 
-
 class RedisConversationMemory:
     def __init__(self, redis_client: Redis):
         self.redis = redis_client
         self.max_history = Config.MEMORY_WINDOW_SIZE
 
     async def save_message(self, conversation_id: str, role: str, content: str):
+        """
+        Save a message to the conversation memory.
+        If the latest message is identical to the new one, it will not be saved.
+        """
         key = f"chat:{conversation_id}"
+        
+        # Deduplication: Check the most recent message
+        last_message_json = self.redis.lindex(key, 0)
+        if last_message_json:
+            try:
+                last_message = json.loads(last_message_json)
+                if last_message.get("role") == role and last_message.get("content") == content:
+                    logger.info(f"Duplicate message detected for conversation {conversation_id}; skipping save.")
+                    return
+            except Exception as e:
+                logger.error(f"Error during deduplication check for conversation {conversation_id}: {str(e)}")
+        
+        # Build the message object
         message = json.dumps({
             "role": role,
             "content": content,
             "timestamp": datetime.now().isoformat()
         })
+        
+        # Save using a pipeline to ensure atomicity
         pipeline = self.redis.pipeline()
         pipeline.lpush(key, message)
         pipeline.ltrim(key, 0, self.max_history - 1)
@@ -302,13 +320,15 @@ class RedisConversationMemory:
         pipeline.execute()
 
     def get_history(self, conversation_id: str) -> List[Dict]:
+        """
+        Retrieve and parse the conversation history.
+        Returns a list of messages in chronological order.
+        """
         key = f"chat:{conversation_id}"
         messages = self.redis.lrange(key, 0, self.max_history - 1)
         
-        # Add logging for debugging
         logger.debug(f"Retrieved {len(messages)} messages for conversation {conversation_id}")
         
-        # Parse messages with error handling
         parsed_messages = []
         for msg in messages:
             try:
@@ -318,9 +338,13 @@ class RedisConversationMemory:
                 logger.error(f"Failed to parse message in conversation {conversation_id}: {msg}")
                 continue
                 
+        # Reverse the list to get chronological order (oldest first)
         return parsed_messages[::-1]
 
     def format_history_for_prompt(self, conversation_id: str) -> str:
+        """
+        Format the conversation history for prompt inclusion.
+        """
         history = self.get_history(conversation_id)
         return "\n".join([
             f"{'User' if msg['role'] == 'user' else 'Assistant'}: {msg['content']}"
@@ -328,7 +352,9 @@ class RedisConversationMemory:
         ])
 
     async def cleanup_old_conversations(self):
-        """Cleanup conversations older than TTL"""
+        """
+        Cleanup conversations with no TTL (older than the configured time).
+        """
         for key in self.redis.scan_iter("chat:*"):
             if not self.redis.ttl(key):
                 self.redis.delete(key)
