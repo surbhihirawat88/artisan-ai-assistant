@@ -637,16 +637,6 @@ def _generate_suggested_actions(response: str) -> List[str]:
     if "integration" in response.lower():
         actions.append("Visit integration documentation")
     return actions[:3]
-    
-def get_conversation_chain(self, conversation_id: str) -> ConversationalRetrievalChain:
-    try:
-        history = self.memory.get_history(conversation_id)
-        
-        # Add variety check
-        if history:
-            last_few_messages = [msg["content"] for msg in history if msg["role"] == "user"][-3:]
-            if len(last_few_messages) > 1 and all(msg == last_few_messages[0] for msg in last_few_messages):
-                logger.warning(f"Repetitive messages detected in conversation {conversation_id}")
                 
 
 app = FastAPI(
