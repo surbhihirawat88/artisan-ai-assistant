@@ -522,7 +522,7 @@ Response:""",
             return False
 
     def get_conversation_chain(self, conversation_id: str) -> ConversationalRetrievalChain:
-    try:
+        try:  # This line should be indented
         # Get and format history
         history = self.memory.get_history(conversation_id)
         formatted_history = "\n".join([
@@ -535,8 +535,8 @@ Response:""",
             memory_key="chat_history",
             return_messages=True,
             k=Config.MEMORY_WINDOW_SIZE,
-            output_key="output",  # Changed from "answer" to "output"
-            input_key="input"     # Added explicit input key
+            output_key="output",
+            input_key="input"
         )
 
         # Convert history to message format and inject into memory
@@ -544,7 +544,7 @@ Response:""",
             if msg["role"] == "user":
                 memory.save_context(
                     {"input": msg["content"]}, 
-                    {"output": ""}  # Changed from "answer" to "output"
+                    {"output": ""}
                 )
             else:
                 # Find the preceding user message if it exists
@@ -556,7 +556,7 @@ Response:""",
                 )
                 memory.save_context(
                     {"input": prev_msg}, 
-                    {"output": msg["content"]}  # Changed from "answer" to "output"
+                    {"output": msg["content"]}
                 )
 
         # Create the chain with enhanced configuration
@@ -572,7 +572,7 @@ Response:""",
             },
             return_source_documents=True,
             verbose=True,
-            output_key="output"  # Added to match memory configuration
+            output_key="output"
         )
     except Exception as e:
         logger.error(f"Error creating conversation chain: {str(e)}", exc_info=True)
