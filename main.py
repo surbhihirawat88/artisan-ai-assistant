@@ -31,6 +31,7 @@ from langchain.chains import ConversationalRetrievalChain
 from langchain.prompts import PromptTemplate
 from typing import TYPE_CHECKING
 
+
 if TYPE_CHECKING:
     from .knowledge_manager import KnowledgeManager
 
@@ -47,6 +48,46 @@ logger = logging.getLogger(__name__)
 
 
 load_dotenv()
+
+def extract_related_topics(query: str, response: str) -> List[str]:
+    """Extract related topics from query and response."""
+    topics = []
+    topic_mapping = {
+        "sales_ai": ["sales", "automation", "pipeline", "leads", "crm"],
+        "ai_agent": ["agent", "ava", "assistant", "bot", "ai"],
+        "email_warmup": ["email", "warmup", "deliverability", "inbox", "spam"],
+        "linkedin": ["linkedin", "social", "network", "outreach", "profile"],
+        "data_services": ["data", "b2b", "ecommerce", "local", "database"]
+    }
+
+    combined_text = f"{query.lower()} {response.lower()}"
+    
+    for topic, keywords in topic_mapping.items():
+        if any(keyword in combined_text for keyword in keywords):
+            topics.append(topic)
+    
+    if not topics:
+        topics = ["sales_ai", "ai_agent"]
+    
+    return topics[:3]
+
+def _generate_suggested_actions(response: str) -> List[str]:
+    actions = []
+    if "setup" in response.lower():
+        actions.append("Book a demo for setup guidance")
+    if "email warmup" in response.lower():
+        actions.append("Check email warmup dashboard")
+    if "campaign" in response.lower():
+        actions.append("Review campaign templates")
+    if "data" in response.lower():
+        actions.append("Explore available data sets")
+    if "integration" in response.lower():
+        actions.append("Visit integration documentation")
+    return actions[:3]
+
+
+
+
 
 
 class Config:
@@ -607,28 +648,6 @@ def get_conversation_chain(self, conversation_id: str) -> ConversationalRetrieva
             if len(last_few_messages) > 1 and all(msg == last_few_messages[0] for msg in last_few_messages):
                 logger.warning(f"Repetitive messages detected in conversation {conversation_id}")
                 
-def extract_related_topics(query: str, response: str) -> List[str]:
-    """Extract related topics from query and response."""
-    topics = []
-    topic_mapping = {
-        "sales_ai": ["sales", "automation", "pipeline", "leads", "crm"],
-        "ai_agent": ["agent", "ava", "assistant", "bot", "ai"],
-        "email_warmup": ["email", "warmup", "deliverability", "inbox", "spam"],
-        "linkedin": ["linkedin", "social", "network", "outreach", "profile"],
-        "data_services": ["data", "b2b", "ecommerce", "local", "database"]
-    }
-
-    combined_text = f"{query.lower()} {response.lower()}"
-    
-    for topic, keywords in topic_mapping.items():
-        if any(keyword in combined_text for keyword in keywords):
-            topics.append(topic)
-    
-    # If no topics found, include default topics
-    if not topics:
-        topics = ["sales_ai", "ai_agent"]
-    
-    return topics[:3]  # Return top 3 related topics
 
 app = FastAPI(
     title="Artisan AI Assistant",
