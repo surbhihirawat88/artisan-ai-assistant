@@ -482,26 +482,26 @@ class ConversationManager:
     def _setup_prompt_template(self):
         self.prompt = PromptTemplate(
             template="""
-You are an AI assistant for Artisan, specializing in:
-1. Sales Platform and AI Agent (Ava)
-2. Email Warmup and Deliverability
-3. LinkedIn Outreach and Sales Automation
-4. Data Services (B2B, E-commerce, Local)
-
-Current context: {context}
-Previous conversation:
-{chat_history}
-
-Question: {question}
-
-Provide a response that:
-1. Directly addresses the question
-2. References specific Artisan features
-3. Includes relevant examples
-4. Suggests next steps when appropriate
-
-Response:""",
-            input_variables=["context", "chat_history", "question"]
+    You are an AI assistant for Artisan, specializing in:
+    1. Sales Platform and AI Agent (Ava)
+    2. Email Warmup and Deliverability
+    3. LinkedIn Outreach and Sales Automation
+    4. Data Services (B2B, E-commerce, Local)
+    
+    Current context: {context}
+    Previous conversation:
+    {chat_history}
+    
+    Input: {input}
+    
+    Provide a response that:
+    1. Directly addresses the question
+    2. References specific Artisan features
+    3. Includes relevant examples
+    4. Suggests next steps when appropriate
+    
+    Response:""",
+            input_variables=["context", "chat_history", "input"]  # Changed from "question" to "input"
         )
 
     def _validate_history(self, history: List[Dict]) -> bool:
@@ -549,6 +549,7 @@ Response:""",
                     )
                     memory.save_context({"input": prev_msg}, {"output": msg["content"]})
     
+            
             return ConversationalRetrievalChain.from_llm(
                 llm=self.llm,
                 retriever=self.knowledge_manager.vectorstore.as_retriever(
@@ -561,7 +562,8 @@ Response:""",
                 },
                 return_source_documents=True,
                 verbose=True,
-                output_key="output"
+                input_key="input",      # Add this
+                output_key="output"     # Add this
             )
     
         except Exception as e:
@@ -649,45 +651,45 @@ async def chat(
         # Get relevant content for context
         relevant_content = knowledge_manager.get_relevant_content(chat_request.message)
         
-        # Format context with user context and relevant content
+        # Format context
         context = {
             "user_context": chat_request.context or {},
             "relevant_content": relevant_content,
             "timestamp": datetime.now().isoformat()
         }
 
-        # Save the user's message
+        # Save user message
         await conversation_manager.memory.save_message(
             chat_request.conversation_id,
             "user",
             chat_request.message
         )
 
-        # Get conversation chain
+        # Get chain
         chain = conversation_manager.get_conversation_chain(chat_request.conversation_id)
         
-        # Get response with context
-        result = chain({
-            "input": chat_request.message,  # Changed from "question" to "input"
+        # Call chain with correct input key
+        result = await chain.ainvoke({  # Using ainvoke instead of __call__
+            "input": chat_request.message,
             "context": json.dumps(context, default=str)
         })
 
-        # Save the assistant's response
+        # Save response
         await conversation_manager.memory.save_message(
             chat_request.conversation_id,
             "assistant",
-            result["output"]  # Changed from "answer" to "output"
+            result["output"]
         )
 
-        # Schedule knowledge base update in background
+        # Background tasks
         background_tasks.add_task(knowledge_manager.update_knowledge_base)
 
         return ChatResponse(
-            response=result["output"],  # Changed from "answer" to "output"
+            response=result["output"],
             sources=[doc.page_content[:200] for doc in result.get("source_documents", [])],
             confidence=min(len(result.get("source_documents", [])) / 3.0, 1.0),
-            suggested_actions=_generate_suggested_actions(result["output"]),  # Changed from "answer" to "output"
-            related_topics=_extract_related_topics(chat_request.message, result["output"])  # Changed from "answer" to "output"
+            suggested_actions=_generate_suggested_actions(result["output"]),
+            related_topics=_extract_related_topics(chat_request.message, result["output"])
         )
     except Exception as e:
         logger.error(f"Chat error: {str(e)}")
