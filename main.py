@@ -522,54 +522,61 @@ Response:""",
             return False
 
     def get_conversation_chain(self, conversation_id: str) -> ConversationalRetrievalChain:
-        try:
-            # Get and format history
-            history = self.memory.get_history(conversation_id)
-            formatted_history = "\n".join([
-                f"{'User' if msg['role'] == 'user' else 'Assistant'}: {msg['content']}"
-                for msg in history
-            ])
+    try:
+        # Get and format history
+        history = self.memory.get_history(conversation_id)
+        formatted_history = "\n".join([
+            f"{'User' if msg['role'] == 'user' else 'Assistant'}: {msg['content']}"
+            for msg in history
+        ])
 
-            # Initialize memory with proper configuration
-            memory = ConversationBufferWindowMemory(
-                memory_key="chat_history",
-                return_messages=True,
-                k=Config.MEMORY_WINDOW_SIZE,
-                output_key="answer"
-            )
+        # Initialize memory with proper configuration
+        memory = ConversationBufferWindowMemory(
+            memory_key="chat_history",
+            return_messages=True,
+            k=Config.MEMORY_WINDOW_SIZE,
+            output_key="output",  # Changed from "answer" to "output"
+            input_key="input"     # Added explicit input key
+        )
 
-            # Convert history to message format and inject into memory
-            for msg in history:
-                if msg["role"] == "user":
-                    memory.save_context({"input": msg["content"]}, {"output": ""})
-                else:
-                    # Find the preceding user message if it exists
-                    prev_msg = next(
-                        (h["content"] for h in history 
-                         if h["role"] == "user" and 
-                         datetime.fromisoformat(h["timestamp"]) < datetime.fromisoformat(msg["timestamp"])),
-                        ""
-                    )
-                    memory.save_context({"input": prev_msg}, {"output": msg["content"]})
+        # Convert history to message format and inject into memory
+        for msg in history:
+            if msg["role"] == "user":
+                memory.save_context(
+                    {"input": msg["content"]}, 
+                    {"output": ""}  # Changed from "answer" to "output"
+                )
+            else:
+                # Find the preceding user message if it exists
+                prev_msg = next(
+                    (h["content"] for h in history 
+                     if h["role"] == "user" and 
+                     datetime.fromisoformat(h["timestamp"]) < datetime.fromisoformat(msg["timestamp"])),
+                    ""
+                )
+                memory.save_context(
+                    {"input": prev_msg}, 
+                    {"output": msg["content"]}  # Changed from "answer" to "output"
+                )
 
-            # Create the chain with enhanced configuration
-            return ConversationalRetrievalChain.from_llm(
-                llm=self.llm,
-                retriever=self.knowledge_manager.vectorstore.as_retriever(
-                    search_kwargs={"k": 5}  # Increase relevant document count
-                ),
-                memory=memory,
-                combine_docs_chain_kwargs={
-                    "prompt": self.prompt,
-                    "document_separator": "\n\n",  # Better document separation
-                    "return_source_documents": True
-                },
-                return_source_documents=True,
-                verbose=True
-            )
-        except Exception as e:
-            logger.error(f"Error creating conversation chain: {str(e)}", exc_info=True)
-            raise
+        # Create the chain with enhanced configuration
+        return ConversationalRetrievalChain.from_llm(
+            llm=self.llm,
+            retriever=self.knowledge_manager.vectorstore.as_retriever(
+                search_kwargs={"k": 5}
+            ),
+            memory=memory,
+            combine_docs_chain_kwargs={
+                "prompt": self.prompt,
+                "document_separator": "\n\n",
+            },
+            return_source_documents=True,
+            verbose=True,
+            output_key="output"  # Added to match memory configuration
+        )
+    except Exception as e:
+        logger.error(f"Error creating conversation chain: {str(e)}", exc_info=True)
+        raise
 
 
 def _extract_related_topics(query: str, response: str) -> List[str]:
@@ -678,7 +685,7 @@ async def chat(
         
         # Get response with context
         result = chain({
-            "question": chat_request.message,
+            "input": chat_request.message,  # Changed from "question" to "input"
             "context": json.dumps(context, default=str)
         })
 
@@ -686,18 +693,18 @@ async def chat(
         await conversation_manager.memory.save_message(
             chat_request.conversation_id,
             "assistant",
-            result["answer"]
+            result["output"]  # Changed from "answer" to "output"
         )
 
         # Schedule knowledge base update in background
         background_tasks.add_task(knowledge_manager.update_knowledge_base)
 
         return ChatResponse(
-            response=result["answer"],
+            response=result["output"],  # Changed from "answer" to "output"
             sources=[doc.page_content[:200] for doc in result.get("source_documents", [])],
             confidence=min(len(result.get("source_documents", [])) / 3.0, 1.0),
-            suggested_actions=_generate_suggested_actions(result["answer"]),
-            related_topics=_extract_related_topics(chat_request.message, result["answer"])
+            suggested_actions=_generate_suggested_actions(result["output"]),  # Changed from "answer" to "output"
+            related_topics=_extract_related_topics(chat_request.message, result["output"])  # Changed from "answer" to "output"
         )
     except Exception as e:
         logger.error(f"Chat error: {str(e)}")
