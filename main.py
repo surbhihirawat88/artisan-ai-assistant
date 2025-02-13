@@ -44,7 +44,47 @@ logger = logging.getLogger(__name__)
 
 load_dotenv()
 
+class BackgroundTaskManager:
+    def __init__(self, knowledge_manager: KnowledgeManager):
+        self.knowledge_manager = knowledge_manager
+        self.is_running = False
+        self.tasks = []
 
+    async def start_tasks(self):
+        # Starts all background tasks if not already running
+        if not self.is_running:
+            self.is_running = True
+            self.tasks = [
+                asyncio.create_task(self._periodic_knowledge_update()),
+                asyncio.create_task(self._periodic_cleanup())
+            ]
+
+    async def stop_tasks(self):
+        # Properly shuts down all background tasks
+        self.is_running = False
+        for task in self.tasks:
+            task.cancel()
+        await asyncio.gather(*self.tasks, return_exceptions=True)
+
+    async def _periodic_knowledge_update(self):
+        # Periodically updates the knowledge base
+        while self.is_running:
+            try:
+                await self.knowledge_manager.update_knowledge_base()
+                await asyncio.sleep(Config.KNOWLEDGE_UPDATE_INTERVAL)
+            except Exception as e:
+                logger.error(f"Knowledge update failed: {str(e)}", exc_info=True)
+                await asyncio.sleep(300)  # Wait 5 minutes before retry
+
+    async def _periodic_cleanup(self):
+        # Periodically cleans up old data
+        while self.is_running:
+            try:
+                await self.knowledge_manager._cleanup_vector_store()
+                await asyncio.sleep(Config.CLEANUP_INTERVAL)
+            except Exception as e:
+                logger.error(f"Cleanup failed: {str(e)}", exc_info=True)
+                await asyncio.sleep(300)
 class Config:
     """Application configuration"""
     OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
@@ -68,6 +108,13 @@ class Config:
     RATE_LIMIT = "100/hour"
     MAX_RETRIES = 3
     RETRY_DELAY = 1  # seconds_new
+    
+    KNOWLEDGE_UPDATE_INTERVAL = 86400  # 24 hours
+    CLEANUP_INTERVAL = 43200  # 12 hours
+    
+    # Background task retry settings
+    TASK_RETRY_DELAY = 300  # 5 minutes
+    MAX_TASK_RETRIES = 3
 
     # Vector store cleanup configuration
     VECTOR_STORE_MAX_AGE = timedelta(days=7)
@@ -205,6 +252,7 @@ class HealthCheckResponse(BaseModel):
     redis_connected: bool
     memory_usage: Dict[str, int]
     uptime: float
+    background_tasks_status: bool 
 
 
 class MetricsCollector:
@@ -471,7 +519,14 @@ Response:""",
 
     def get_conversation_chain(self, conversation_id: str) -> ConversationalRetrievalChain:
         try:
-            # Initialize memory to store conversation pairs
+            # Get and format history
+            history = self.memory.get_history(conversation_id)
+            formatted_history = "\n".join([
+                f"{'User' if msg['role'] == 'user' else 'Assistant'}: {msg['content']}"
+                for msg in history
+            ])
+
+            # Initialize memory with proper configuration
             memory = ConversationBufferWindowMemory(
                 memory_key="chat_history",
                 return_messages=True,
@@ -479,50 +534,37 @@ Response:""",
                 output_key="answer"
             )
 
-            # Retrieve and validate history from Redis
-            history = self.memory.get_history(conversation_id)
-            if not self._validate_history(history):
-                logger.warning(f"Invalid history format for conversation {conversation_id}, starting fresh")
-                history = []
+            # Convert history to message format and inject into memory
+            for msg in history:
+                if msg["role"] == "user":
+                    memory.save_context({"input": msg["content"]}, {"output": ""})
+                else:
+                    # Find the preceding user message if it exists
+                    prev_msg = next(
+                        (h["content"] for h in history 
+                         if h["role"] == "user" and 
+                         datetime.fromisoformat(h["timestamp"]) < datetime.fromisoformat(msg["timestamp"])),
+                        ""
+                    )
+                    memory.save_context({"input": prev_msg}, {"output": msg["content"]})
 
-            # Pair messages with improved error handling
-            user_msg = None
-            for msg in sorted(history, key=lambda x: x["timestamp"]):
-                try:
-                    if msg["role"] == "user":
-                        # If we get a new user message and already had one, save the old one
-                        if user_msg:
-                            memory.save_context({"input": user_msg}, {"answer": ""})
-                        user_msg = msg["content"]
-                    elif msg["role"] == "assistant" and user_msg:
-                        memory.save_context({"input": user_msg}, {"answer": msg["content"]})
-                        user_msg = None
-                except Exception as e:
-                    logger.error(f"Error processing message in conversation {conversation_id}: {str(e)}")
-                    continue
-
-            # Handle any remaining unpaired user message
-            if user_msg:
-                memory.save_context({"input": user_msg}, {"answer": ""})
-
-            # Update the TTL for the conversation key
-            try:
-                key = f"chat:{conversation_id}"
-                self.memory.redis.expire(key, Config.REDIS_KEY_TTL)
-            except Exception as e:
-                logger.error(f"Failed to update TTL for conversation {conversation_id}: {str(e)}")
-
-            # Create and return the conversational retrieval chain
+            # Create the chain with enhanced configuration
             return ConversationalRetrievalChain.from_llm(
                 llm=self.llm,
-                retriever=self.knowledge_manager.vectorstore.as_retriever(),
+                retriever=self.knowledge_manager.vectorstore.as_retriever(
+                    search_kwargs={"k": 5}  # Increase relevant document count
+                ),
                 memory=memory,
-                combine_docs_chain_kwargs={"prompt": self.prompt},
+                combine_docs_chain_kwargs={
+                    "prompt": self.prompt,
+                    "document_separator": "\n\n",  # Better document separation
+                    "return_source_documents": True
+                },
                 return_source_documents=True,
                 verbose=True
             )
         except Exception as e:
-            logger.error(f"Failed to create conversation chain for {conversation_id}: {str(e)}")
+            logger.error(f"Error creating conversation chain: {str(e)}", exc_info=True)
             raise
 
 
@@ -604,22 +646,37 @@ async def add_process_time_header(request: Request, call_next):
 @app.post("/chat", response_model=ChatResponse)
 @limiter.limit(Config.RATE_LIMIT)
 async def chat(
-    request: Request,                      # Request object for middlewares
-    chat_request: ChatRequest,             # Request body data
+    request: Request,
+    chat_request: ChatRequest,
     background_tasks: BackgroundTasks,
-    api_key: str = Depends(verify_api_key) # Default parameter
+    api_key: str = Depends(verify_api_key)
 ):
     try:
-        # Save the user's message using the body parameter 'chat_request'
+        # Get relevant content for context
+        relevant_content = knowledge_manager.get_relevant_content(chat_request.message)
+        
+        # Format context with user context and relevant content
+        context = {
+            "user_context": chat_request.context or {},
+            "relevant_content": relevant_content,
+            "timestamp": datetime.now().isoformat()
+        }
+
+        # Save the user's message
         await conversation_manager.memory.save_message(
             chat_request.conversation_id,
             "user",
             chat_request.message
         )
 
-        # Get response using the conversation chain
+        # Get conversation chain
         chain = conversation_manager.get_conversation_chain(chat_request.conversation_id)
-        result = chain({"question": chat_request.message})
+        
+        # Get response with context
+        result = chain({
+            "question": chat_request.message,
+            "context": json.dumps(context, default=str)
+        })
 
         # Save the assistant's response
         await conversation_manager.memory.save_message(
@@ -643,25 +700,35 @@ async def chat(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-
 @app.get("/health", response_model=HealthCheckResponse)
 async def health_check(api_key: str = Depends(verify_api_key)):
-    process = psutil.Process()
-    memory_info = process.memory_info()
+    try:
+        process = psutil.Process()
+        memory_info = process.memory_info()
+        
+        # Check background tasks
+        background_tasks_running = (
+            background_task_manager is not None and 
+            background_task_manager.is_running
+        )
 
-    return HealthCheckResponse(
-        status="healthy",
-        vector_store=bool(knowledge_manager.vectorstore),
-        vector_store_size=knowledge_manager.get_vector_store_size(),
-        last_update=knowledge_manager.last_update,
-        redis_connected=redis_client.ping(),
-        memory_usage={
-            "rss": memory_info.rss,
-            "vms": memory_info.vms,
-            "shared": memory_info.shared,
-        },
-        uptime=(datetime.now() - startup_time).total_seconds()
-    )
+        return HealthCheckResponse(
+            status="healthy",
+            vector_store=bool(knowledge_manager.vectorstore),
+            vector_store_size=knowledge_manager.get_vector_store_size(),
+            last_update=knowledge_manager.last_update,
+            redis_connected=redis_client.ping(),
+            memory_usage={
+                "rss": memory_info.rss,
+                "vms": memory_info.vms,
+                "shared": memory_info.shared,
+            },
+            uptime=(datetime.now() - startup_time).total_seconds(),
+            background_tasks_status=background_tasks_running
+        )
+    except Exception as e:
+        logger.error(f"Health check failed: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Health check failed")
 
 
 @app.get("/metrics")
@@ -691,17 +758,34 @@ async def get_history_count(
 
 @app.on_event("startup")
 async def startup_event():
-    # Initialize knowledge base
-    await knowledge_manager.update_knowledge_base()
-    logger.info("Application started, knowledge base initialized")
+    global background_task_manager
+    try:
+        # Initialize knowledge base
+        await knowledge_manager.update_knowledge_base()
+        
+        # Start background tasks
+        background_task_manager = BackgroundTaskManager(knowledge_manager)
+        await background_task_manager.start_tasks()
+        
+        logger.info("Application started successfully with background tasks")
+    except Exception as e:
+        logger.error(f"Startup failed: {str(e)}", exc_info=True)
+        raise
 
 
 
 @app.on_event("shutdown")
 async def shutdown_event():
-    # Clean up resources
-    redis_client.close()
-    logger.info("Application shutdown, resources cleaned up")
+    try:
+        # Stop background tasks
+        if background_task_manager:
+            await background_task_manager.stop_tasks()
+        
+        # Cleanup resources
+        redis_client.close()
+        logger.info("Application shutdown completed")
+    except Exception as e:
+        logger.error(f"Shutdown error: {str(e)}", exc_info=True)
 
 
 if __name__ == "__main__":
