@@ -522,69 +522,52 @@ Response:""",
             return False
 
     def get_conversation_chain(self, conversation_id: str) -> ConversationalRetrievalChain:
-        try:  # This line should be indented
-        # Get and format history
-        history = self.memory.get_history(conversation_id)
-        formatted_history = "\n".join([
-            f"{'User' if msg['role'] == 'user' else 'Assistant'}: {msg['content']}"
-            for msg in history
-        ])
+        try:
+            history = self.memory.get_history(conversation_id)
+            formatted_history = "\n".join([
+                f"{'User' if msg['role'] == 'user' else 'Assistant'}: {msg['content']}"
+                for msg in history
+            ])
+    
+            memory = ConversationBufferWindowMemory(
+                memory_key="chat_history",
+                return_messages=True,
+                k=Config.MEMORY_WINDOW_SIZE,
+                output_key="output",
+                input_key="input"
+            )
+    
+            for msg in history:
+                if msg["role"] == "user":
+                    memory.save_context({"input": msg["content"]}, {"output": ""})
+                else:
+                    prev_msg = next(
+                        (h["content"] for h in history 
+                         if h["role"] == "user" and 
+                         datetime.fromisoformat(h["timestamp"]) < datetime.fromisoformat(msg["timestamp"])),
+                        ""
+                    )
+                    memory.save_context({"input": prev_msg}, {"output": msg["content"]})
+    
+            return ConversationalRetrievalChain.from_llm(
+                llm=self.llm,
+                retriever=self.knowledge_manager.vectorstore.as_retriever(
+                    search_kwargs={"k": 5}
+                ),
+                memory=memory,
+                combine_docs_chain_kwargs={
+                    "prompt": self.prompt,
+                    "document_separator": "\n\n",
+                },
+                return_source_documents=True,
+                verbose=True,
+                output_key="output"
+            )
+    
+        except Exception as e:
+            logger.error(f"Error creating conversation chain: {str(e)}", exc_info=True)
+            raise
 
-        # Initialize memory with proper configuration
-        memory = ConversationBufferWindowMemory(
-            memory_key="chat_history",
-            return_messages=True,
-            k=Config.MEMORY_WINDOW_SIZE,
-            output_key="output",
-            input_key="input"
-        )
-
-        # Convert history to message format and inject into memory
-        for msg in history:
-            if msg["role"] == "user":
-                memory.save_context(
-                    {"input": msg["content"]}, 
-                    {"output": ""}
-                )
-            else:
-                # Find the preceding user message if it exists
-                prev_msg = next(
-                    (h["content"] for h in history 
-                     if h["role"] == "user" and 
-                     datetime.fromisoformat(h["timestamp"]) < datetime.fromisoformat(msg["timestamp"])),
-                    ""
-                )
-                memory.save_context(
-                    {"input": prev_msg}, 
-                    {"output": msg["content"]}
-                )
-
-        # Create the chain with enhanced configuration
-        return ConversationalRetrievalChain.from_llm(
-            llm=self.llm,
-            retriever=self.knowledge_manager.vectorstore.as_retriever(
-                search_kwargs={"k": 5}
-            ),
-            memory=memory,
-            combine_docs_chain_kwargs={
-                "prompt": self.prompt,
-                "document_separator": "\n\n",
-            },
-            return_source_documents=True,
-            verbose=True,
-            output_key="output"
-        )
-    except Exception as e:
-        logger.error(f"Error creating conversation chain: {str(e)}", exc_info=True)
-        raise
-
-
-def _extract_related_topics(query: str, response: str) -> List[str]:
-    topics = []
-    for section in KNOWLEDGE_BASE.keys():
-        if section.lower() in query.lower() or section.lower() in response.lower():
-            topics.append(section)
-    return topics[:3]
 
 
 def _generate_suggested_actions(response: str) -> List[str]:
