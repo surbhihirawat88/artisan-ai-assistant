@@ -523,23 +523,27 @@ class ConversationManager:
 
     def get_conversation_chain(self, conversation_id: str) -> ConversationalRetrievalChain:
         try:
+            # Get and format history
             history = self.memory.get_history(conversation_id)
             formatted_history = "\n".join([
                 f"{'User' if msg['role'] == 'user' else 'Assistant'}: {msg['content']}"
                 for msg in history
             ])
     
+            # Initialize memory with proper configuration
             memory = ConversationBufferWindowMemory(
                 memory_key="chat_history",
                 return_messages=True,
-                k=Config.MEMORY_WINDOW_SIZE,
-                output_key="output",
-                input_key="input"
+                k=Config.MEMORY_WINDOW_SIZE
             )
     
+            # Convert history to message format and inject into memory
             for msg in history:
                 if msg["role"] == "user":
-                    memory.save_context({"input": msg["content"]}, {"output": ""})
+                    memory.save_context(
+                        {"question": msg["content"]},  # Changed back to "question"
+                        {"answer": ""}  # Changed back to "answer"
+                    )
                 else:
                     prev_msg = next(
                         (h["content"] for h in history 
@@ -547,9 +551,12 @@ class ConversationManager:
                          datetime.fromisoformat(h["timestamp"]) < datetime.fromisoformat(msg["timestamp"])),
                         ""
                     )
-                    memory.save_context({"input": prev_msg}, {"output": msg["content"]})
+                    memory.save_context(
+                        {"question": prev_msg},  # Changed back to "question"
+                        {"answer": msg["content"]}  # Changed back to "answer"
+                    )
     
-            
+            # Create the chain with default configuration
             return ConversationalRetrievalChain.from_llm(
                 llm=self.llm,
                 retriever=self.knowledge_manager.vectorstore.as_retriever(
@@ -558,14 +565,11 @@ class ConversationManager:
                 memory=memory,
                 combine_docs_chain_kwargs={
                     "prompt": self.prompt,
-                    "document_separator": "\n\n",
+                    "document_separator": "\n\n"
                 },
                 return_source_documents=True,
-                verbose=True,
-                input_key="input",      # Add this
-                output_key="output"     # Add this
+                verbose=True
             )
-    
         except Exception as e:
             logger.error(f"Error creating conversation chain: {str(e)}", exc_info=True)
             raise
@@ -648,7 +652,7 @@ async def chat(
     api_key: str = Depends(verify_api_key)
 ):
     try:
-        # Get relevant content for context
+        # Get relevant content
         relevant_content = knowledge_manager.get_relevant_content(chat_request.message)
         
         # Format context
@@ -668,9 +672,9 @@ async def chat(
         # Get chain
         chain = conversation_manager.get_conversation_chain(chat_request.conversation_id)
         
-        # Call chain with correct input key
-        result = await chain.ainvoke({  # Using ainvoke instead of __call__
-            "input": chat_request.message,
+        # Call chain with default keys
+        result = chain({
+            "question": chat_request.message,  # Changed back to "question"
             "context": json.dumps(context, default=str)
         })
 
@@ -678,19 +682,20 @@ async def chat(
         await conversation_manager.memory.save_message(
             chat_request.conversation_id,
             "assistant",
-            result["output"]
+            result["answer"]  # Changed back to "answer"
         )
-
-        # Background tasks
-        background_tasks.add_task(knowledge_manager.update_knowledge_base)
 
         return ChatResponse(
-            response=result["output"],
+            response=result["answer"],  # Changed back to "answer"
             sources=[doc.page_content[:200] for doc in result.get("source_documents", [])],
             confidence=min(len(result.get("source_documents", [])) / 3.0, 1.0),
-            suggested_actions=_generate_suggested_actions(result["output"]),
-            related_topics=_extract_related_topics(chat_request.message, result["output"])
+            suggested_actions=_generate_suggested_actions(result["answer"]),
+            related_topics=_extract_related_topics(chat_request.message, result["answer"])
         )
+        
+        # Schedule background task
+        background_tasks.add_task(knowledge_manager.update_knowledge_base)
+
     except Exception as e:
         logger.error(f"Chat error: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
