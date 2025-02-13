@@ -583,6 +583,29 @@ def _generate_suggested_actions(response: str) -> List[str]:
         actions.append("Visit integration documentation")
     return actions[:3]
 
+def extract_related_topics(query: str, response: str) -> List[str]:
+    """Extract related topics from query and response."""
+    topics = []
+    topic_mapping = {
+        "sales_ai": ["sales", "automation", "pipeline", "leads", "crm"],
+        "ai_agent": ["agent", "ava", "assistant", "bot", "ai"],
+        "email_warmup": ["email", "warmup", "deliverability", "inbox", "spam"],
+        "linkedin": ["linkedin", "social", "network", "outreach", "profile"],
+        "data_services": ["data", "b2b", "ecommerce", "local", "database"]
+    }
+
+    combined_text = f"{query.lower()} {response.lower()}"
+    
+    for topic, keywords in topic_mapping.items():
+        if any(keyword in combined_text for keyword in keywords):
+            topics.append(topic)
+    
+    # If no topics found, include default topics
+    if not topics:
+        topics = ["sales_ai", "ai_agent"]
+    
+    return topics[:3]  # Return top 3 related topics
+
 app = FastAPI(
     title="Artisan AI Assistant",
     description="AI-powered assistant for Artisan platform",
@@ -675,19 +698,20 @@ async def chat(
         await conversation_manager.memory.save_message(
             chat_request.conversation_id,
             "assistant",
-            result["answer"]  # Changed back to "answer"
+            result["answer"]
         )
 
+        # Schedule background task
+        background_tasks.add_task(knowledge_manager.update_knowledge_base)
+
+        # Return response after scheduling background task
         return ChatResponse(
-            response=result["answer"],  # Changed back to "answer"
+            response=result["answer"],
             sources=[doc.page_content[:200] for doc in result.get("source_documents", [])],
             confidence=min(len(result.get("source_documents", [])) / 3.0, 1.0),
             suggested_actions=_generate_suggested_actions(result["answer"]),
-            related_topics=_extract_related_topics(chat_request.message, result["answer"])
+            related_topics=extract_related_topics(chat_request.message, result["answer"])
         )
-        
-        # Schedule background task
-        background_tasks.add_task(knowledge_manager.update_knowledge_base)
 
     except Exception as e:
         logger.error(f"Chat error: {str(e)}")
