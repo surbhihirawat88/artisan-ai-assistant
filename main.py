@@ -437,7 +437,9 @@ You are an AI assistant for Artisan, specializing in:
 4. Data Services (B2B, E-commerce, Local)
 
 Current context: {context}
-Chat history: {chat_history}
+Previous conversation:
+{chat_history}
+
 Question: {question}
 
 Provide a response that:
@@ -450,30 +452,78 @@ Response:""",
             input_variables=["context", "chat_history", "question"]
         )
 
+    def _validate_history(self, history: List[Dict]) -> bool:
+        """Validate that history contains required fields and proper formatting."""
+        try:
+            for msg in history:
+                if not all(key in msg for key in ["role", "content", "timestamp"]):
+                    logger.error(f"Invalid message format in history: {msg}")
+                    return False
+                if msg["role"] not in ["user", "assistant"]:
+                    logger.error(f"Invalid role in message: {msg['role']}")
+                    return False
+                # Validate timestamp format
+                datetime.fromisoformat(msg["timestamp"])
+            return True
+        except Exception as e:
+            logger.error(f"History validation failed: {str(e)}")
+            return False
+
     def get_conversation_chain(self, conversation_id: str) -> ConversationalRetrievalChain:
-        history = self.memory.get_history(conversation_id)
-        memory = ConversationBufferWindowMemory(
-            memory_key="chat_history",
-            return_messages=True,
-            k=Config.MEMORY_WINDOW_SIZE,
-            output_key="answer"
-        )
+        try:
+            # Initialize memory to store conversation pairs
+            memory = ConversationBufferWindowMemory(
+                memory_key="chat_history",
+                return_messages=True,
+                k=Config.MEMORY_WINDOW_SIZE,
+                output_key="answer"
+            )
 
-        # Load history into memory
-        for msg in history:
-            if msg["role"] == "user":
-                memory.save_context({"input": msg["content"]}, {"answer": ""})
-            else:
-                memory.save_context({"input": ""}, {"answer": msg["content"]})
+            # Retrieve and validate history from Redis
+            history = self.memory.get_history(conversation_id)
+            if not self._validate_history(history):
+                logger.warning(f"Invalid history format for conversation {conversation_id}, starting fresh")
+                history = []
 
-        return ConversationalRetrievalChain.from_llm(
-            llm=self.llm,
-            retriever=self.knowledge_manager.vectorstore.as_retriever(),
-            memory=memory,
-            combine_docs_chain_kwargs={"prompt": self.prompt},
-            return_source_documents=True,
-            verbose=True
-        )
+            # Pair messages with improved error handling
+            user_msg = None
+            for msg in sorted(history, key=lambda x: x["timestamp"]):
+                try:
+                    if msg["role"] == "user":
+                        # If we get a new user message and already had one, save the old one
+                        if user_msg:
+                            memory.save_context({"input": user_msg}, {"answer": ""})
+                        user_msg = msg["content"]
+                    elif msg["role"] == "assistant" and user_msg:
+                        memory.save_context({"input": user_msg}, {"answer": msg["content"]})
+                        user_msg = None
+                except Exception as e:
+                    logger.error(f"Error processing message in conversation {conversation_id}: {str(e)}")
+                    continue
+
+            # Handle any remaining unpaired user message
+            if user_msg:
+                memory.save_context({"input": user_msg}, {"answer": ""})
+
+            # Update the TTL for the conversation key
+            try:
+                key = f"chat:{conversation_id}"
+                self.memory.redis.expire(key, Config.REDIS_KEY_TTL)
+            except Exception as e:
+                logger.error(f"Failed to update TTL for conversation {conversation_id}: {str(e)}")
+
+            # Create and return the conversational retrieval chain
+            return ConversationalRetrievalChain.from_llm(
+                llm=self.llm,
+                retriever=self.knowledge_manager.vectorstore.as_retriever(),
+                memory=memory,
+                combine_docs_chain_kwargs={"prompt": self.prompt},
+                return_source_documents=True,
+                verbose=True
+            )
+        except Exception as e:
+            logger.error(f"Failed to create conversation chain for {conversation_id}: {str(e)}")
+            raise
 
 
 def _extract_related_topics(query: str, response: str) -> List[str]:
