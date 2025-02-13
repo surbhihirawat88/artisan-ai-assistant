@@ -263,7 +263,21 @@ class RedisConversationMemory:
     def get_history(self, conversation_id: str) -> List[Dict]:
         key = f"chat:{conversation_id}"
         messages = self.redis.lrange(key, 0, self.max_history - 1)
-        return [json.loads(msg) for msg in messages][::-1]
+        
+        # Add logging for debugging
+        logger.debug(f"Retrieved {len(messages)} messages for conversation {conversation_id}")
+        
+        # Parse messages with error handling
+        parsed_messages = []
+        for msg in messages:
+            try:
+                parsed_msg = json.loads(msg)
+                parsed_messages.append(parsed_msg)
+            except json.JSONDecodeError:
+                logger.error(f"Failed to parse message in conversation {conversation_id}: {msg}")
+                continue
+                
+        return parsed_messages[::-1]
 
     def format_history_for_prompt(self, conversation_id: str) -> str:
         history = self.get_history(conversation_id)
@@ -582,7 +596,17 @@ def _generate_suggested_actions(response: str) -> List[str]:
     if "integration" in response.lower():
         actions.append("Visit integration documentation")
     return actions[:3]
-
+    
+def get_conversation_chain(self, conversation_id: str) -> ConversationalRetrievalChain:
+    try:
+        history = self.memory.get_history(conversation_id)
+        
+        # Add variety check
+        if history:
+            last_few_messages = [msg["content"] for msg in history if msg["role"] == "user"][-3:]
+            if len(last_few_messages) > 1 and all(msg == last_few_messages[0] for msg in last_few_messages):
+                logger.warning(f"Repetitive messages detected in conversation {conversation_id}")
+                
 def extract_related_topics(query: str, response: str) -> List[str]:
     """Extract related topics from query and response."""
     topics = []
@@ -669,7 +693,10 @@ async def chat(
 ):
     try:
         # Get relevant content
+        history = conversation_manager.memory.get_history(chat_request.conversation_id)
         relevant_content = knowledge_manager.get_relevant_content(chat_request.message)
+        logger.info(f"Processing message for conversation {chat_request.conversation_id}")
+        logger.info(f"Current history length: {len(history)}")
         
         # Format context
         context = {
@@ -805,6 +832,26 @@ async def shutdown_event():
     except Exception as e:
         logger.error(f"Shutdown error: {str(e)}", exc_info=True)
 
+
+@app.get("/conversation/{conversation_id}/summary")
+async def get_conversation_summary(
+    conversation_id: str,
+    api_key: str = Depends(verify_api_key)
+):
+    history = conversation_manager.memory.get_history(conversation_id)
+    return {
+        "conversation_id": conversation_id,
+        "message_count": len(history),
+        "unique_messages": len(set(msg["content"] for msg in history)),
+        "timeline": [
+            {
+                "role": msg["role"],
+                "timestamp": msg["timestamp"],
+                "content_preview": msg["content"][:100]
+            }
+            for msg in history
+        ]
+    }
 
 if __name__ == "__main__":
     import uvicorn
